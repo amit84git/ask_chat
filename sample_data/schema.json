@@ -1,0 +1,93 @@
+{
+    "description": "AskChat sample semantic schema",
+    "version": "1.0",
+    "tables": [
+        {
+            "name": "customers",
+            "schema": "public",
+            "description": "Customer information and profiles",
+            "tags": ["core", "customer"],
+            "columns": [
+                {"name": "id", "data_type": "integer", "nullable": false, "is_primary_key": true},
+                {"name": "name", "data_type": "varchar(100)", "nullable": false, "description": "Customer full name"},
+                {"name": "email", "data_type": "varchar(255)", "nullable": false, "description": "Email address (PII)"},
+                {"name": "phone", "data_type": "varchar(20)", "nullable": true, "description": "Phone number (PII)"},
+                {"name": "city", "data_type": "varchar(100)", "nullable": true},
+                {"name": "state", "data_type": "varchar(50)", "nullable": true},
+                {"name": "country", "data_type": "varchar(50)", "nullable": true},
+                {"name": "signup_date", "data_type": "date", "nullable": true},
+                {"name": "status", "data_type": "varchar(20)", "nullable": true, "description": "active, inactive, suspended"},
+                {"name": "created_at", "data_type": "timestamp", "nullable": true},
+                {"name": "updated_at", "data_type": "timestamp", "nullable": true},
+                {"name": "deleted_at", "data_type": "timestamp", "nullable": true}
+            ]
+        },
+        {
+            "name": "orders",
+            "schema": "public",
+            "description": "Customer order records",
+            "tags": ["core", "sales"],
+            "columns": [
+                {"name": "id", "data_type": "integer", "nullable": false, "is_primary_key": true},
+                {"name": "customer_id", "data_type": "integer", "nullable": false, "is_foreign_key": true, "referenced_table": "customers", "referenced_column": "id"},
+                {"name": "order_date", "data_type": "date", "nullable": true},
+                {"name": "total_amount", "data_type": "decimal(10,2)", "nullable": true, "description": "Total order amount in USD"},
+                {"name": "status", "data_type": "varchar(20)", "nullable": true, "description": "pending, shipped, delivered, cancelled"},
+                {"name": "shipping_city", "data_type": "varchar(100)", "nullable": true},
+                {"name": "shipping_state", "data_type": "varchar(50)", "nullable": true},
+                {"name": "created_at", "data_type": "timestamp", "nullable": true},
+                {"name": "updated_at", "data_type": "timestamp", "nullable": true}
+            ]
+        },
+        {
+            "name": "products",
+            "schema": "public",
+            "description": "Product catalog",
+            "tags": ["core", "inventory"],
+            "columns": [
+                {"name": "id", "data_type": "integer", "nullable": false, "is_primary_key": true},
+                {"name": "name", "data_type": "varchar(200)", "nullable": false, "description": "Product name"},
+                {"name": "category", "data_type": "varchar(100)", "nullable": true, "description": "Product category"},
+                {"name": "price", "data_type": "decimal(10,2)", "nullable": true, "description": "Unit price in USD"},
+                {"name": "stock_quantity", "data_type": "integer", "nullable": true, "description": "Current inventory count"},
+                {"name": "description", "data_type": "text", "nullable": true},
+                {"name": "is_active", "data_type": "boolean", "nullable": true, "default": true},
+                {"name": "created_at", "data_type": "timestamp", "nullable": true},
+                {"name": "updated_at", "data_type": "timestamp", "nullable": true}
+            ]
+        },
+        {
+            "name": "order_items",
+            "schema": "public",
+            "description": "Line items within orders",
+            "tags": ["core", "sales"],
+            "columns": [
+                {"name": "id", "data_type": "integer", "nullable": false, "is_primary_key": true},
+                {"name": "order_id", "data_type": "integer", "nullable": false, "is_foreign_key": true, "referenced_table": "orders", "referenced_column": "id"},
+                {"name": "product_id", "data_type": "integer", "nullable": false, "is_foreign_key": true, "referenced_table": "products", "referenced_column": "id"},
+                {"name": "quantity", "data_type": "integer", "nullable": true, "description": "Number of units ordered"},
+                {"name": "unit_price", "data_type": "decimal(10,2)", "nullable": true, "description": "Price per unit at time of order"},
+                {"name": "created_at", "data_type": "timestamp", "nullable": true}
+            ]
+        }
+    ],
+    "domain_keywords": {
+        "client": ["customers", "customer"],
+        "buyer": ["customers", "customer"],
+        "purchase": ["orders", "order_items", "products"],
+        "sell": ["products", "order_items"],
+        "revenue": ["orders", "order_items"],
+        "inventory": ["products", "stock_quantity"],
+        "invoic": ["orders"],
+        "ship": ["orders", "shipping_city", "shipping_state"],
+        "location": ["customers", "city", "state", "country"],
+        "catalog": ["products", "name", "category", "price"],
+        "user": ["customers", "name", "email"],
+        "item": ["products", "order_items", "product_id"],
+        "money": ["orders", "total_amount", "order_items", "unit_price", "products", "price"],
+        "date": ["orders", "order_date", "customers", "signup_date", "created_at"],
+        "status": ["orders", "status", "customers", "status"],
+        "active": ["customers", "status"],
+        "top": ["orders", "total_amount"]
+    }
+}

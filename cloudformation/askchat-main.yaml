@@ -1,0 +1,395 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  AskChat - AI-Powered Natural Language to SQL Platform
+  CloudFormation template compatible with Floci local AWS emulator.
+  Switch to real AWS by removing the Floci endpoint and using real credentials.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+    Description: Environment name for resource naming
+
+  AppName:
+    Type: String
+    Default: askchat
+    Description: Application name used for resource naming
+
+  VpcId:
+    Type: String
+    Default: vpc-123456
+    Description: VPC ID (Floci uses a default VPC)
+
+  SubnetIds:
+    Type: CommaDelimitedList
+    Default: "subnet-123456,subnet-789012"
+    Description: Subnet IDs for RDS (Floci compatible)
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+    Description: RDS instance class
+
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+    Description: Database storage in GB
+
+  DBUsername:
+    Type: String
+    Default: askchat
+    Description: Database master username
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Default: askchat_secret_2024
+    Description: Database master password
+
+  LLMProvider:
+    Type: String
+    Default: claude
+    AllowedValues:
+      - claude
+      - titan
+      - none
+    Description: LLM provider for query generation
+
+  UseFloci:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Set to true for local Floci deployment, false for real AWS
+
+  S3BucketName:
+    Type: String
+    Default: askchat-artifacts
+    Description: Name of the S3 bucket for uploads and artifacts
+
+Conditions:
+  UseFlociEndpoint: !Equals [!Ref UseFloci, "true"]
+  IsProduction: !Equals [!Ref EnvironmentName, "prod"]
+
+Mappings:
+  EnvironmentConfig:
+    dev:
+      InstanceType: t3.micro
+      DBInstanceClass: db.t3.micro
+      DBAllocatedStorage: 20
+      HealthCheckPath: /health
+    test:
+      InstanceType: t3.small
+      DBInstanceClass: db.t3.small
+      DBAllocatedStorage: 30
+      HealthCheckPath: /health
+    prod:
+      InstanceType: t3.medium
+      DBInstanceClass: db.t3.medium
+      DBAllocatedStorage: 50
+      HealthCheckPath: /health
+
+  RegionConfig:
+    us-east-1:
+      AMIId: ami-0abcdef1234567890
+      AZ1: us-east-1a
+      AZ2: us-east-1b
+
+Resources:
+  # ============================================================
+  # S3 Bucket for Artifacts
+  # ============================================================
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 90
+
+  ArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource:
+              - !GetAtt ArtifactsBucket.Arn
+              - !Sub "${ArtifactsBucket.Arn}/*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": "false"
+
+  # ============================================================
+  # Secrets Manager for Database Credentials
+  # ============================================================
+  DBSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}/db-credentials"
+      Description: Database credentials for AskChat
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${DBUsername}"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\\'
+
+  # ============================================================
+  # RDS PostgreSQL Instance
+  # ============================================================
+  RDSDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: postgres
+      EngineVersion: "15.4"
+      DBInstanceClass: !FindInMap [EnvironmentConfig, !Ref EnvironmentName, DBInstanceClass]
+      AllocatedStorage: !FindInMap [EnvironmentConfig, !Ref EnvironmentName, DBAllocatedStorage]
+      DBName: askchat
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      BackupRetentionPeriod: 7
+      MultiAZ: false
+      PubliclyAccessible: true
+      StorageType: gp3
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-postgres"
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for AskChat RDS PostgreSQL
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-db-sg"
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for AskChat RDS
+      SubnetIds: !Ref SubnetIds
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-db-subnet-group"
+
+  # ============================================================
+  # Lambda Function for Async Tasks (e.g., heavy query processing)
+  # ============================================================
+  AsyncQueryProcessor:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-async-processor"
+      Runtime: python3.11
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          DB_HOST: !GetAtt RDSDBInstance.Endpoint.Address
+          DB_PORT: !GetAtt RDSDBInstance.Endpoint.Port
+          DB_NAME: askchat
+          DB_USER: !Ref DBUsername
+          DB_PASSWORD: !Ref DBPassword
+          S3_BUCKET: !Ref ArtifactsBucket
+          LLM_PROVIDER: !Ref LLMProvider
+          USE_FLOCI: !Ref UseFloci
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "body": json.dumps({"message": "Async processing placeholder"})
+              }
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ArtifactsBucket.Arn
+                  - !Sub "${ArtifactsBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DBSecret
+
+  # ============================================================
+  # API Gateway (HTTP API for simplicity)
+  # ============================================================
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${AWS::StackName}-http-api"
+      ProtocolType: HTTP
+      Description: AskChat HTTP API
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+        AllowHeaders:
+          - content-type
+          - authorization
+        MaxAge: 300
+
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: !Ref EnvironmentName
+      AutoDeploy: true
+
+  # ============================================================
+  # CloudWatch Log Group
+  # ============================================================
+  ApplicationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/application/${AWS::StackName}"
+      RetentionInDays: 30
+
+  # ============================================================
+  # IAM User for Application (Least Privilege)
+  # ============================================================
+  ApplicationUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub "${AWS::StackName}-app-user"
+      Policies:
+        - PolicyName: AskChatAppPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:DeleteObject
+                Resource:
+                  - !GetAtt ArtifactsBucket.Arn
+                  - !Sub "${ArtifactsBucket.Arn}/*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DBSecret
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  ApplicationUserAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref ApplicationUser
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${EnvironmentName}"
+
+  DatabaseEndpoint:
+    Description: RDS PostgreSQL endpoint
+    Value: !GetAtt RDSDBInstance.Endpoint.Address
+
+  DatabasePort:
+    Description: RDS PostgreSQL port
+    Value: !GetAtt RDSDBInstance.Endpoint.Port
+
+  S3BucketName:
+    Description: Artifacts S3 bucket name
+    Value: !Ref ArtifactsBucket
+
+  S3BucketArn:
+    Description: Artifacts S3 bucket ARN
+    Value: !GetAtt ArtifactsBucket.Arn
+
+  DBSecretArn:
+    Description: Secrets Manager secret ARN for DB credentials
+    Value: !Ref DBSecret
+
+  ApplicationUserAccessKeyId:
+    Description: IAM user access key ID
+    Value: !Ref ApplicationUserAccessKey
+
+  ApplicationUserSecretAccessKey:
+    Description: IAM user secret access key (use with caution)
+    Value: !GetAtt ApplicationUserAccessKey.SecretAccessKey
+
+  LambdaFunctionName:
+    Description: Async query processor Lambda function name
+    Value: !Ref AsyncQueryProcessor
+
+  CloudWatchLogGroup:
+    Description: Application CloudWatch log group
+    Value: !Ref ApplicationLogGroup

@@ -1,0 +1,110 @@
+services:
+  # ============================================================
+  # PostgreSQL Database
+  # ============================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: askchat-postgres
+    environment:
+      POSTGRES_DB: askchat
+      POSTGRES_USER: askchat
+      POSTGRES_PASSWORD: askchat_secret_2024
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sample_data/seed.sql:/docker-entrypoint-initdb.d/01-seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U askchat -d askchat"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ============================================================
+  # Ollama - Local LLM Server (open-source models)
+  # ============================================================
+  ollama:
+    image: ollama/ollama:latest
+    container_name: askchat-ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    command: serve
+    # Pull a small model on startup (phi3:mini is ~2.2GB, runs on CPU)
+    # For better results use: llama3.1:8b (~4.7GB)
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================
+  # Floci - Local AWS Emulator
+  # ============================================================
+  floci:
+    image: floci/floci:latest
+    container_name: askchat-floci
+    environment:
+      - SERVICES=s3,lambda,apigateway,stepfunctions,iam,sts,secretsmanager,rds,logs,bedrock
+      - DEFAULT_REGION=us-east-1
+      - DATA_DIR=/var/lib/floci
+    ports:
+      - "4566:4566"
+    volumes:
+      - floci_data:/var/lib/floci
+
+  # ============================================================
+  # AskChat FastAPI Application
+  # ============================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: askchat-app
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - AWS_ENDPOINT_URL=http://floci:4566
+      - BEDROCK_ENDPOINT_URL=http://floci:4566/bedrock
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=dummy
+      - AWS_SECRET_ACCESS_KEY=dummy
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=askchat
+      - DB_USER=askchat
+      - DB_PASSWORD=askchat_secret_2024
+      - S3_BUCKET_NAME=askchat-artifacts
+      # Use local Ollama for LLM (zero-cost, open-source models)
+      - LLM_PROVIDER=ollama
+      - LOCAL_LLM_ENDPOINT=http://ollama:11434
+      - LOCAL_LLM_MODEL=llama3.1:8b
+      - FEATURE_BEDROCK=false
+      - LOG_LEVEL=INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      floci:
+        condition: service_started
+      ollama:
+        condition: service_started
+    volumes:
+      - ./app:/app/app
+      - ./sample_data:/app/sample_data
+      - ./output:/app/output
+    command: >
+      sh -c "
+        cd /app &&
+        python -m spacy download en_core_web_sm 2>/dev/null || true &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
+
+volumes:
+  postgres_data:
+  floci_data:
+  ollama_data:

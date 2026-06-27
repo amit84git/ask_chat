@@ -1,0 +1,41 @@
+# Core Framework
+fastapi>=0.100.0,<1.0.0
+uvicorn[standard]>=0.22.0,<1.0.0
+pydantic>=2.5.0,<3.0.0
+pydantic-settings>=2.1.0,<3.0.0
+
+# Database
+psycopg2-binary>=2.9.0,<3.0.0
+SQLAlchemy>=2.0.0,<3.0.0
+
+# AWS SDK (only needed for S3/Floci integration)
+boto3>=1.28.0,<2.0.0
+
+# NLP & Fuzzy Matching
+spacy>=3.6.0,<4.0.0
+rapidfuzz>=3.0.0,<4.0.0
+flashtext>=2.7,<3.0
+
+# Graph Analysis
+networkx>=3.1,<4.0
+pyvis>=0.3.0,<1.0
+
+# Data Processing
+pandas>=2.0.0,<3.0.0
+numpy>=1.24.0,<2.0.0
+
+# Visualization
+matplotlib>=3.7.0,<4.0.0
+altair>=5.0.0,<6.0.0
+
+# Utilities
+python-multipart>=0.0.6,<1.0.0
+python-dotenv>=1.0.0,<2.0.0
+openpyxl>=3.1.0,<4.0.0
+requests>=2.31.0,<3.0.0
+pyyaml>=6.0,<7.0
+httpx>=0.25.0,<1.0.0
+
+# Testing
+pytest>=8.0.0,<9.0.0
+pytest-asyncio>=0.23.0,<1.0.0
